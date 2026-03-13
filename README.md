@@ -76,7 +76,7 @@ docker compose up -d
 
 When `WEB_ENABLED=true`, a control panel is available at `http://your-host:8123` — lists all Bedrock containers (running and stopped), shows player count and version, and allows starting/stopping with one click.
 
-![Screenshot](https://raw.githubusercontent.com/AuswahlKobra23/minecraft-bedrock-home-control/main/docs/screenshot.png)
+![Web-Interface](assets/Action.gif)
 
 ### Configuration
 
