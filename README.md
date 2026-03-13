@@ -1,5 +1,7 @@
 # Minecraft Bedrock Home Control
 
+[![Docker Hub](https://img.shields.io/docker/pulls/auswahlkobra23/minecraft-bedrock-home-control?style=flat-square&logo=docker)](https://hub.docker.com/repository/docker/auswahlkobra23/minecraft-bedrock-home-control/general)
+
 You run one or more Minecraft Bedrock servers at home for your kids. The servers live inside Docker containers or Proxmox LXC containers — because that's the sane way to manage them. But two problems keep coming up:
 
 **Discovery.** Bedrock uses UDP broadcasts on port 19132 to show nearby servers automatically in the client. Those broadcasts don't escape a container's network namespace, so the servers are invisible to players on the LAN — unless you're running directly on the host. You could just add servers manually by IP, but that's extra steps every time a new device shows up, and kids don't want to deal with that.
@@ -55,10 +57,16 @@ Each server needs a unique host port (19133, 19134, ...).
 
 **2. Deploy the broadcaster**
 
-Place `bedrock_home_control.py`, `Dockerfile` and `docker-compose.yml` in a folder and run:
+Download `docker-compose.yml` and run — no build step needed:
 
 ```bash
-docker compose up --build -d
+docker compose up -d
+```
+
+Or pull the image manually:
+
+```bash
+docker pull auswahlkobra23/minecraft-bedrock-home-control:latest
 ```
 
 ### Web Interface
@@ -97,7 +105,6 @@ With Proxmox LXC containers, each container gets its own IP address — so Bedro
 ### Requirements
 
 - Python 3.10+
-- `pip install requests`
 - Proxmox API token with `VM.Audit` and `VM.PowerMgmt` on `/vms`
 
 ### Setup
