@@ -1,34 +1,36 @@
 # Minecraft Bedrock Home Control
 
+🇬🇧 [English version](README_en.md)
+
 [![Docker Hub](https://img.shields.io/docker/pulls/auswahlkobra23/minecraft-bedrock-home-control?style=flat-square&logo=docker)](https://hub.docker.com/repository/docker/auswahlkobra23/minecraft-bedrock-home-control/general)
 
-Run multiple Minecraft Bedrock servers at home and have them show up automatically on the LAN — with a web interface so the kids can start them on demand, and auto-stop when nobody is playing anymore.
+Betreibe mehrere Minecraft-Bedrock-Server zu Hause und lass sie automatisch im LAN erscheinen – mit einer Web-Oberfläche, über die die Kinder Server auf Knopfdruck starten können, und automatischem Stopp wenn niemand mehr spielt.
 
-**How it works:**
-- The broadcaster listens on UDP port 19132 (must be free on the host) and makes all labelled containers visible to Bedrock clients on the LAN
-- Label your server containers with `mc.bedrock=true` to enable discovery
-- Add `mc.autostop=true` to automatically stop a server when it's been empty for a configurable timeout
-- The optional web interface lets anyone on the LAN start and stop servers with one tap
+**So funktioniert es:**
+- Der Broadcaster lauscht auf UDP-Port 19132 (muss auf dem Host frei sein) und macht alle markierten Container für Bedrock-Clients im LAN sichtbar
+- Markiere deine Server-Container mit `mc.bedrock=true` um sie auffindbar zu machen
+- Füge `mc.autostop=true` hinzu um einen Server automatisch zu stoppen, wenn er für eine konfigurierbare Zeit leer war
+- Die optionale Web-Oberfläche ermöglicht es jedem im LAN, Server mit einem Klick zu starten und zu stoppen
 
-Two variants are available depending on your setup:
+Je nach Setup stehen zwei Varianten zur Verfügung:
 
-| Setup | Folder |
+| Setup | Ordner |
 |---|---|
-| Docker on a Linux host | `docker/` |
-| Proxmox with LXC containers | `proxmox/` |
+| Docker auf einem Linux-Host | `docker/` |
+| Proxmox mit LXC-Containern | `proxmox/` |
 
 ---
 
 ## Docker
 
-### Requirements
+### Voraussetzungen
 
-- Docker with Compose
-- Bedrock server containers must have port mappings and labels (see below)
+- Docker mit Compose
+- Bedrock-Server-Container müssen Port-Mappings und Labels haben (siehe unten)
 
-### Setup
+### Einrichtung
 
-**1. Label your Minecraft containers**
+**1. Minecraft-Container beschriften**
 
 ```yaml
 services:
@@ -39,15 +41,15 @@ services:
     environment:
       - EULA=TRUE
     labels:
-      mc.bedrock: "true"       # required: enables discovery
-      mc.autostop: "true"      # optional: enables auto-stop when empty
+      mc.bedrock: "true"       # Pflicht: aktiviert die Erkennung
+      mc.autostop: "true"      # Optional: aktiviert Auto-Stop bei Leerlauf
     volumes:
       - ./data:/data
 ```
 
-Each server needs a unique host port (19133, 19134, ...).
+Jeder Server braucht einen eindeutigen Host-Port (19133, 19134, ...).
 
-**2. Create a `docker-compose.yml`**
+**2. `docker-compose.yml` erstellen**
 
 ```yaml
 services:
@@ -66,65 +68,65 @@ services:
     restart: unless-stopped
 ```
 
-**3. Start**
+**3. Starten**
 
 ```bash
 docker compose up -d
 ```
 
-### Web Interface
+### Web-Oberfläche
 
-When `WEB_ENABLED=true`, a control panel is available at `http://your-host:8123` — lists all Bedrock containers (running and stopped), shows player count and version, and allows starting/stopping with one click.
+Wenn `WEB_ENABLED=true` gesetzt ist, steht unter `http://dein-host:8123` ein Control-Panel zur Verfügung – zeigt alle Bedrock-Container (laufend und gestoppt), Spieleranzahl und Version, und erlaubt das Starten/Stoppen per Klick.
 
-![Screenshot](https://raw.githubusercontent.com/AuswahlKobra23/minecraft-bedrock-home-control/main/docs/screenshot.png)
+![Web-Interface](assets/Action.gif)
 
-### Configuration
+### Konfiguration
 
-| Variable | Default | Description |
+| Variable | Standard | Beschreibung |
 |---|---|---|
-| `LABEL_FILTER` | `mc.bedrock=true` | Label to discover servers |
-| `AUTOSTOP_LABEL` | `mc.autostop=true` | Label to enable auto-stop |
-| `IDLE_TIMEOUT` | `300` | Seconds before stopping empty server |
-| `CHECK_INTERVAL` | `15` | Seconds between player count checks |
-| `LISTEN_PORT` | `19132` | UDP port to listen on |
-| `WEB_ENABLED` | `true` | Enable or disable the web interface |
-| `WEB_PORT` | `8123` | HTTP port for web interface |
+| `LABEL_FILTER` | `mc.bedrock=true` | Label zur Server-Erkennung |
+| `AUTOSTOP_LABEL` | `mc.autostop=true` | Label für Auto-Stop |
+| `IDLE_TIMEOUT` | `300` | Sekunden bis zum Stopp eines leeren Servers |
+| `CHECK_INTERVAL` | `15` | Sekunden zwischen Spielerzahl-Prüfungen |
+| `LISTEN_PORT` | `19132` | UDP-Port zum Lauschen |
+| `WEB_ENABLED` | `true` | Web-Oberfläche aktivieren oder deaktivieren |
+| `WEB_PORT` | `8123` | HTTP-Port für die Web-Oberfläche |
 
 ---
 
 ## Proxmox
 
-With Proxmox LXC containers, each container gets its own IP address — so Bedrock's LAN discovery works natively without a broadcaster. This variant handles auto-stop and the web interface only.
+Bei Proxmox-LXC-Containern bekommt jeder Container eine eigene IP-Adresse – daher funktioniert Bedrocks LAN-Erkennung nativ ohne Broadcaster. Diese Variante übernimmt nur Auto-Stop und die Web-Oberfläche.
 
-### Requirements
+### Voraussetzungen
 
 - Python 3.10+
-- Proxmox API token with `VM.Audit` and `VM.PowerMgmt` on `/vms`
+- Proxmox API-Token mit `VM.Audit` und `VM.PowerMgmt` auf `/vms`
 
-### Setup
+### Einrichtung
 
-**1. Create a Proxmox API token**
+**1. Proxmox API-Token erstellen**
 
-In the Proxmox web UI:
-- Datacenter → Permissions → API Tokens → Add
-- User: create a dedicated user e.g. `autostopper@pve`
-- Disable Privilege Separation
-- Assign a role with `VM.Audit` + `VM.PowerMgmt` on path `/vms` with Propagate enabled
+Im Proxmox Web-UI:
+- Datacenter → Berechtigungen → API-Tokens → Hinzufügen
+- Benutzer: einen dedizierten Benutzer anlegen, z.B. `autostopper@pve`
+- Privilege Separation deaktivieren
+- Eine Rolle mit `VM.Audit` + `VM.PowerMgmt` auf Pfad `/vms` mit aktiviertem Propagate zuweisen
 
-**2. Tag your LXC containers**
+**2. LXC-Container taggen**
 
-In the Proxmox web UI, set tags on each Minecraft LXC container:
-- Container → Options → Tags
-- `mc-bedrock` — required: enables discovery
-- `mc-autostop` — optional: enables auto-stop when empty
+Im Proxmox Web-UI Tags an jedem Minecraft-LXC-Container setzen:
+- Container → Optionen → Tags
+- `mc-bedrock` — Pflicht: aktiviert die Erkennung
+- `mc-autostop` — Optional: aktiviert Auto-Stop bei Leerlauf
 
-**3. Configure and run**
+**3. Konfigurieren und starten**
 
-Edit the configuration block at the top of `proxmox/bedrock_home_control.py`:
+Den Konfigurationsblock am Anfang von `proxmox/bedrock_home_control.py` anpassen:
 
 ```python
 PROXMOX_HOST   = "https://localhost:8006"
-PROXMOX_NODE   = "your-node-name"   # run: hostname
+PROXMOX_NODE   = "your-node-name"   # ausführen: hostname
 API_TOKEN_ID   = "autostopper@pve!autostopper"
 API_TOKEN_SEC  = "your-token-secret"
 IDLE_TIMEOUT   = 300
@@ -133,7 +135,7 @@ WEB_ENABLED    = True
 WEB_PORT       = 8123
 ```
 
-Install as a systemd service on the Proxmox node:
+Als systemd-Service auf dem Proxmox-Node installieren:
 
 ```bash
 cp bedrock_home_control.py /opt/bedrock_home_control.py
@@ -157,14 +159,14 @@ systemctl enable --now bedrock-home-control
 
 ---
 
-## Repository structure
+## Repository-Struktur
 
 ```
 ├── README.md
 ├── docker/
-│   ├── bedrock_home_control.py  # LAN Broadcaster + Auto-Stop + Web UI
+│   ├── bedrock_home_control.py  # LAN-Broadcaster + Auto-Stop + Web-UI
 │   ├── Dockerfile
-│   └── docker-compose.yml       # Broadcaster only – add your MC servers separately
+│   └── docker-compose.yml       # Nur Broadcaster – MC-Server separat hinzufügen
 └── proxmox/
-    └── bedrock_home_control.py  # Auto-Stop + Web UI for Proxmox LXC
+    └── bedrock_home_control.py  # Auto-Stop + Web-UI für Proxmox LXC
 ```
