@@ -1,0 +1,14 @@
+services:
+  broadcaster:
+    build: .
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - LABEL_FILTER=mc.bedrock=true
+      - AUTOSTOP_LABEL=mc.autostop=true
+      - IDLE_TIMEOUT=300
+      - CHECK_INTERVAL=15
+      - WEB_PORT=8123
+      - WEB_ENABLED=true
+    restart: unless-stopped
