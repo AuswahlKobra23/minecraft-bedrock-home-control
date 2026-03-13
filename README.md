@@ -2,32 +2,24 @@
 
 [![Docker Hub](https://img.shields.io/docker/pulls/auswahlkobra23/minecraft-bedrock-home-control?style=flat-square&logo=docker)](https://hub.docker.com/repository/docker/auswahlkobra23/minecraft-bedrock-home-control/general)
 
-You run one or more Minecraft Bedrock servers at home for your kids. The servers live inside Docker containers or Proxmox LXC containers — because that's the sane way to manage them. But two problems keep coming up:
+Run multiple Minecraft Bedrock servers at home and have them show up automatically on the LAN — with a web interface so the kids can start them on demand, and auto-stop when nobody is playing anymore.
 
-**Discovery.** Bedrock uses UDP broadcasts on port 19132 to show nearby servers automatically in the client. Those broadcasts don't escape a container's network namespace, so the servers are invisible to players on the LAN — unless you're running directly on the host. You could just add servers manually by IP, but that's extra steps every time a new device shows up, and kids don't want to deal with that.
+**How it works:**
+- The broadcaster listens on UDP port 19132 (must be free on the host) and makes all labelled containers visible to Bedrock clients on the LAN
+- Label your server containers with `mc.bedrock=true` to enable discovery
+- Add `mc.autostop=true` to automatically stop a server when it's been empty for a configurable timeout
+- The optional web interface lets anyone on the LAN start and stop servers with one tap
 
-If you already have a server running directly on the host on port 19132, that one will still show up automatically — no changes needed. This tool only adds visibility for the containerised servers alongside it.
+Two variants are available depending on your setup:
 
-**Idle servers wasting resources.** The servers don't need to run 24/7. After the kids are done playing, they just close the game — the server keeps running, using memory and CPU for nothing. Shutting it down manually means someone has to remember to do it.
-
-This repository solves both problems, depending on your setup:
-
-| Setup | Tool | Folder |
-|---|---|---|
-| Docker on a Linux host | LAN Broadcaster + Auto-Stop + Web UI | `docker/` |
-| Proxmox with LXC containers | Auto-Stop + Web UI | `proxmox/` |
+| Setup | Folder |
+|---|---|
+| Docker on a Linux host | `docker/` |
+| Proxmox with LXC containers | `proxmox/` |
 
 ---
 
-## Docker: LAN Broadcaster + Auto-Stop
-
-### How it works
-
-- Listens on UDP 19132 for Bedrock ping packets from LAN clients
-- Discovers running Bedrock containers via Docker label (`mc.bedrock=true`)
-- Forwards each server's PONG response directly to the client, correcting the port
-- Optionally stops idle containers after a configurable timeout (`mc.autostop=true`)
-- Optional web interface for starting, stopping and monitoring servers
+## Docker
 
 ### Requirements
 
@@ -55,29 +47,38 @@ services:
 
 Each server needs a unique host port (19133, 19134, ...).
 
-**2. Deploy the broadcaster**
+**2. Create a `docker-compose.yml`**
 
-Download `docker-compose.yml` and run — no build step needed:
+```yaml
+services:
+  bedrock-home-control:
+    image: auswahlkobra23/minecraft-bedrock-home-control:latest
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - LABEL_FILTER=mc.bedrock=true
+      - AUTOSTOP_LABEL=mc.autostop=true
+      - IDLE_TIMEOUT=300
+      - CHECK_INTERVAL=15
+      - WEB_ENABLED=true
+      - WEB_PORT=8123
+    restart: unless-stopped
+```
+
+**3. Start**
 
 ```bash
 docker compose up -d
-```
-
-Or pull the image manually:
-
-```bash
-docker pull auswahlkobra23/minecraft-bedrock-home-control:latest
 ```
 
 ### Web Interface
 
 When `WEB_ENABLED=true`, a control panel is available at `http://your-host:8123` — lists all Bedrock containers (running and stopped), shows player count and version, and allows starting/stopping with one click.
 
-![Minecraft Server Control Panel](docs/screenshot.png)
+![Screenshot](https://raw.githubusercontent.com/AuswahlKobra23/minecraft-bedrock-home-control/main/docs/screenshot.png)
 
 ### Configuration
-
-All settings are via environment variables in `docker-compose.yml`:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -91,16 +92,9 @@ All settings are via environment variables in `docker-compose.yml`:
 
 ---
 
-## Proxmox: Auto-Stop + Web Interface
+## Proxmox
 
-### How it works
-
-With Proxmox LXC containers, each container gets its own IP address — so Bedrock's LAN discovery works natively without a broadcaster. This tool handles auto-stop and optionally a web interface for server management.
-
-- Discovers LXC containers via Proxmox API using the tag `mc-bedrock`
-- Queries player count directly via RakNet UDP ping
-- Stops idle containers via the Proxmox API (`mc-autostop` tag)
-- Optional web interface for starting, stopping and monitoring servers
+With Proxmox LXC containers, each container gets its own IP address — so Bedrock's LAN discovery works natively without a broadcaster. This variant handles auto-stop and the web interface only.
 
 ### Requirements
 
@@ -142,10 +136,9 @@ WEB_PORT       = 8123
 Install as a systemd service on the Proxmox node:
 
 ```bash
-pip install requests
 cp bedrock_home_control.py /opt/bedrock_home_control.py
 
-cat > /etc/systemd/system/bedrock-home-control.service << EOF2
+cat > /etc/systemd/system/bedrock-home-control.service << EOF
 [Unit]
 Description=Minecraft Bedrock Home Control
 After=network.target
@@ -156,7 +149,7 @@ Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
-EOF2
+EOF
 
 systemctl daemon-reload
 systemctl enable --now bedrock-home-control
