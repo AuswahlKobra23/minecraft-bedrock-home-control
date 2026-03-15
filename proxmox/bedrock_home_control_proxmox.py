@@ -159,6 +159,7 @@ def get_all_containers() -> list[dict]:
             })
     except Exception as e:
         logging.error(f"Proxmox API Fehler: {e}")
+    result.sort(key=lambda c: c["name"])
     return result
 
 
