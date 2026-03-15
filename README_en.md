@@ -2,7 +2,7 @@
 
 🇩🇪 [Deutsche Version](README.md)
 
-[![Docker Hub](https://img.shields.io/docker/pulls/auswahlkobra23/minecraft-bedrock-home-control?style=flat-square&logo=docker)](https://hub.docker.com/repository/docker/auswahlkobra23/minecraft-bedrock-home-control/general)
+[![Docker Hub](https://img.shields.io/docker/pulls/auswahlkobra23/minecraft-bedrock-home-control?style=flat-square&logo=docker)](https://hub.docker.com/r/auswahlkobra23/minecraft-bedrock-home-control)
 
 Run multiple Minecraft Bedrock servers at home and have them show up automatically on the LAN — with a web interface so the kids can start them on demand, and auto-stop when nobody is playing anymore.
 
