@@ -14,13 +14,18 @@ Proxmox API Token:
   Datacenter → Permissions → API Tokens → Add
   Benötigte Rechte: VM.PowerMgmt + VM.Audit auf /vms
 
+Konfiguration:
+  /etc/bedrock_home_control_proxmox.conf  (oder per --config Argument)
+
 Systemd-Service:
-  cp bedrock_home_control.py /opt/bedrock_home_control.py
+  cp bedrock_home_control_proxmox.py /opt/bedrock_home_control_proxmox.py
   systemctl enable --now bedrock-home-control
 """
 
+import configparser
 import json
 import logging
+import os
 import socket
 import struct
 import threading
@@ -33,22 +38,53 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ---------------------------------------------------------------------------
-# Konfiguration
+# Konfiguration laden
 # ---------------------------------------------------------------------------
-PROXMOX_HOST    = "https://localhost:8006"
-PROXMOX_NODE    = "pve"                         # Ausgabe von: hostname
-API_TOKEN_ID    = "autostopper@pve!mc-stop"
-API_TOKEN_SEC   = "DEIN-TOKEN-SECRET-HIER"
+DEFAULT_CONFIG = "/etc/bedrock_home_control_proxmox.conf"
 
-MC_PORT         = 19132
-IDLE_TIMEOUT    = 300                           # Sekunden bis zum Stopp
-CHECK_INTERVAL  = 15                            # Sekunden zwischen Abfragen
-MC_BEDROCK_TAG  = "mc-bedrock"                  # Tag für Discovery (auch gestoppte)
-MC_AUTOSTOP_TAG = "mc-autostop"                 # Tag für Auto-Stop
+def load_config(path: str) -> configparser.ConfigParser:
+    cfg = configparser.ConfigParser(default_section="config")
+    # Defaults damit fehlende Keys nicht crashen
+    cfg["config"] = {
+        "proxmox_host":    "https://localhost:8006",
+        "proxmox_node":    "pve",
+        "api_token_id":    "",
+        "api_token_sec":   "",
+        "mc_port":         "19132",
+        "idle_timeout":    "300",
+        "check_interval":  "15",
+        "mc_bedrock_tag":  "mc-bedrock",
+        "mc_autostop_tag": "mc-autostop",
+        "web_enabled":     "true",
+        "web_host":        "0.0.0.0",
+        "web_port":        "8123",
+    }
+    if not os.path.exists(path):
+        logging.warning(f"Konfigurationsdatei nicht gefunden: {path} – nutze Defaults")
+    else:
+        cfg.read(path)
+    return cfg["config"]
 
-WEB_ENABLED     = True                          # Web-Interface an/aus
-WEB_HOST        = "0.0.0.0"
-WEB_PORT        = 8123
+import sys
+config_path = DEFAULT_CONFIG
+for i, arg in enumerate(sys.argv[1:]):
+    if arg == "--config" and i + 1 < len(sys.argv) - 1:
+        config_path = sys.argv[i + 2]
+
+CFG = load_config(config_path)
+
+PROXMOX_HOST    = CFG["proxmox_host"]
+PROXMOX_NODE    = CFG["proxmox_node"]
+API_TOKEN_ID    = CFG["api_token_id"]
+API_TOKEN_SEC   = CFG["api_token_sec"]
+MC_PORT         = int(CFG["mc_port"])
+IDLE_TIMEOUT    = int(CFG["idle_timeout"])
+CHECK_INTERVAL  = int(CFG["check_interval"])
+MC_BEDROCK_TAG  = CFG["mc_bedrock_tag"]
+MC_AUTOSTOP_TAG = CFG["mc_autostop_tag"]
+WEB_ENABLED     = CFG["web_enabled"].lower() == "true"
+WEB_HOST        = CFG["web_host"]
+WEB_PORT        = int(CFG["web_port"])
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -85,12 +121,10 @@ def query_server(ip: str) -> dict | None:
         sock.sendto(build_ping(), (ip, MC_PORT))
         data, _ = sock.recvfrom(2048)
         sock.close()
-
         if len(data) < 35 or data[0] != UNCONNECTED_PONG:
             return None
         if RAKNET_MAGIC not in data:
             return None
-
         motd_len = struct.unpack(">H", data[33:35])[0]
         motd = data[35:35 + motd_len].decode("utf-8", errors="replace")
         parts = motd.split(";")
@@ -191,15 +225,17 @@ def autostop_watcher():
     """Läuft im Hintergrund, prüft Spielerzahl und stoppt leere Container."""
     while True:
         time.sleep(CHECK_INTERVAL)
-        containers = [c for c in get_all_containers() if c["running"] and c["autostop"]]
-        active_names = {c["name"] for c in containers}
+        containers = get_all_containers()
+        active = {c["name"] for c in containers if c["running"]}
 
         with LOCK:
             for name in list(idle_since.keys()):
-                if name not in active_names:
+                if name not in active:
                     idle_since.pop(name, None)
 
         for c in containers:
+            if not c["running"] or not c["autostop"]:
+                continue
             name = c["name"]
             vmid = c["vmid"]
             ip = get_lxc_ip(vmid)
@@ -264,23 +300,25 @@ HTML = """<!DOCTYPE html>
   </div>
 
   <script>
+    let serverData = [];
+
     async function load() {
       const res = await fetch('/api/servers');
-      const servers = await res.json();
-      const el = document.getElementById('servers');
+      serverData = await res.json();
+      render();
+    }
 
-      if (!servers.length) {
+    function render() {
+      const el = document.getElementById('servers');
+      if (!serverData.length) {
         el.innerHTML = '<p class="text-zinc-600 text-sm">Keine Server gefunden.<br>LXC-Container brauchen den Tag <code class="text-green-600">mc-bedrock</code>.</p>';
         return;
       }
-
-      el.innerHTML = servers.map(s => {
+      el.innerHTML = serverData.map(s => {
         const on = s.running;
-        const idle = s.idle_since ? Math.floor((Date.now()/1000) - s.idle_since) : null;
-        const idleStr = idle !== null
-          ? `<span class="text-amber-500/70">idle ${fmtSecs(idle)} / ${s.idle_timeout}s</span>`
+        const idleStr = s.idle_since
+          ? `<span id="idle-${s.name}" class="text-amber-500/70"></span>`
           : '';
-
         return `
         <div class="rounded-xl p-5 ${on ? 'bg-zinc-900 card-glow' : 'bg-zinc-900/50 card-glow-off'} transition-all">
           <div class="flex items-center justify-between gap-4">
@@ -297,8 +335,8 @@ HTML = """<!DOCTYPE html>
               </div>
             </div>
             <button
-              onclick="toggle('${s.vmid}', '${s.name}', ${on})"
-              id="btn-${s.vmid}"
+              onclick="toggle('${s.name}', ${on})"
+              id="btn-${s.name}"
               class="flex-shrink-0 px-4 py-1.5 rounded-lg text-sm font-medium transition-all
                 ${on
                   ? 'bg-zinc-800 hover:bg-red-900/60 hover:text-red-400 text-zinc-300 border border-zinc-700'
@@ -309,9 +347,9 @@ HTML = """<!DOCTYPE html>
           </div>
         </div>`;
       }).join('');
-
       document.getElementById('updated').textContent =
         'aktualisiert: ' + new Date().toLocaleTimeString('de-DE');
+      updateTimers();
     }
 
     function fmtSecs(s) {
@@ -319,12 +357,22 @@ HTML = """<!DOCTYPE html>
       return Math.floor(s/60) + 'm ' + (s%60) + 's';
     }
 
-    async function toggle(vmid, name, running) {
-      const btn = document.getElementById('btn-' + vmid);
+    function updateTimers() {
+      serverData.forEach(s => {
+        const el = document.getElementById('idle-' + s.name);
+        if (!el) return;
+        const idle = s.idle_since ? Math.floor((Date.now()/1000) - s.idle_since) : null;
+        const remaining = idle !== null ? Math.max(0, s.idle_timeout - idle) : null;
+        el.textContent = remaining !== null ? 'stop in ' + fmtSecs(remaining) : '';
+      });
+    }
+
+    async function toggle(name, running) {
+      const btn = document.getElementById('btn-' + name);
       btn.disabled = true;
       btn.classList.add('opacity-50');
       const action = running ? 'stop' : 'start';
-      await fetch(`/api/${action}/${vmid}`, { method: 'POST' });
+      await fetch(`/api/${action}/${encodeURIComponent(name)}`, { method: 'POST' });
       setTimeout(load, 800);
       setTimeout(load, 2500);
       setTimeout(load, 5000);
@@ -332,6 +380,7 @@ HTML = """<!DOCTYPE html>
 
     load();
     setInterval(load, 10000);
+    setInterval(updateTimers, 1000);
   </script>
 </body>
 </html>"""
@@ -394,12 +443,16 @@ class WebHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path.startswith("/api/start/"):
-            vmid = int(self.path[len("/api/start/"):])
-            threading.Thread(target=start_lxc, args=(vmid, f"lxc-{vmid}"), daemon=True).start()
+            name = self.path[len("/api/start/"):]
+            c = next((c for c in get_all_containers() if c["name"] == name), None)
+            if c:
+                threading.Thread(target=start_lxc, args=(c["vmid"], c["name"]), daemon=True).start()
             self.send_json({"ok": True})
         elif self.path.startswith("/api/stop/"):
-            vmid = int(self.path[len("/api/stop/"):])
-            threading.Thread(target=stop_lxc, args=(vmid, f"lxc-{vmid}"), daemon=True).start()
+            name = self.path[len("/api/stop/"):]
+            c = next((c for c in get_all_containers() if c["name"] == name), None)
+            if c:
+                threading.Thread(target=stop_lxc, args=(c["vmid"], c["name"]), daemon=True).start()
             self.send_json({"ok": True})
         else:
             self.send_response(404)
@@ -416,6 +469,7 @@ def run_web():
 # ---------------------------------------------------------------------------
 def main():
     logging.info("Bedrock Home Control (Proxmox) gestartet.")
+    logging.info(f"Config: {config_path}")
     logging.info(f"Node: {PROXMOX_NODE} | Idle-Timeout: {IDLE_TIMEOUT}s | Web: {'an' if WEB_ENABLED else 'aus'}")
 
     threading.Thread(target=autostop_watcher, daemon=True).start()
@@ -423,7 +477,6 @@ def main():
     if WEB_ENABLED:
         threading.Thread(target=run_web, daemon=True).start()
 
-    # Hauptthread am Leben halten
     while True:
         time.sleep(60)
 

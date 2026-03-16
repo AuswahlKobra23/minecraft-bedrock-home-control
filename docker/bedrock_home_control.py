@@ -142,44 +142,48 @@ def fix_ports(pong: bytes, host_port: int) -> bytes:
 # ---------------------------------------------------------------------------
 # Docker Hilfsfunktionen
 # ---------------------------------------------------------------------------
-def docker_ps(include_stopped: bool = False, autostop_only: bool = False) -> list[dict]:
+AUTOSTOP_KEY = AUTOSTOP_LABEL.split("=")[0]
+AUTOSTOP_VAL = AUTOSTOP_LABEL.split("=")[1] if "=" in AUTOSTOP_LABEL else "true"
+
+
+def docker_ps(include_stopped: bool = False) -> list[dict]:
     """Gibt alle Bedrock-Container zurück (laufend + optional gestoppt)."""
     result = []
     try:
         filters = ["--filter", f"label={LABEL_FILTER}"]
         if not include_stopped:
             filters += ["--filter", "status=running"]
-        if autostop_only:
-            filters += ["--filter", f"label={AUTOSTOP_LABEL}"]
         output = subprocess.check_output(
             ["docker", "ps", "-a", *filters,
-             "--format", "{{.Names}}\t{{.Status}}\t{{.Ports}}"],
+             "--format", "{{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Labels}}"],
             text=True,
         )
         for line in output.splitlines():
             line = line.strip()
             if not line:
                 continue
-            parts = line.split("\t", 2)
-            name   = parts[0].strip()
-            status = parts[1].strip() if len(parts) > 1 else ""
-            ports  = parts[2].strip() if len(parts) > 2 else ""
+            parts = line.split("\t", 3)
+            name    = parts[0].strip()
+            status  = parts[1].strip() if len(parts) > 1 else ""
+            ports   = parts[2].strip() if len(parts) > 2 else ""
+            labels  = parts[3].strip() if len(parts) > 3 else ""
             running = status.lower().startswith("up")
             m = PORT_RE.search(ports)
             port = int(m.group(1)) if m else None
-            result.append({"name": name, "running": running, "port": port, "status": status})
+            autostop = f"{AUTOSTOP_KEY}={AUTOSTOP_VAL}" in labels
+            result.append({"name": name, "running": running, "port": port, "status": status, "autostop": autostop})
     except Exception as e:
         logging.error(f"Docker-Fehler: {e}")
+    result.sort(key=lambda c: c["name"])
     return result
 
 
-def get_bedrock_containers(autostop_only: bool = False) -> list[tuple[str, int]]:
+def get_bedrock_containers() -> list[tuple[str, int]]:
     """Gibt (name, host_port) für alle laufenden Bedrock-Container zurück."""
     return [
         (c["name"], c["port"])
         for c in docker_ps()
         if c["running"] and c["port"] is not None
-        and (not autostop_only)
     ]
 
 
@@ -205,33 +209,18 @@ def autostop_watcher():
     """Läuft im Hintergrund, prüft Spielerzahl und stoppt leere Container."""
     while True:
         time.sleep(CHECK_INTERVAL)
-        containers = [
-            (c["name"], c["port"])
-            for c in docker_ps()
-            if c["running"] and c["port"] is not None
-        ]
-        # Nur Container mit autostop-Label stoppen
-        try:
-            autostop_names = {
-                line.strip()
-                for line in subprocess.check_output(
-                    ["docker", "ps", "--filter", f"label={AUTOSTOP_LABEL}",
-                     "--filter", "status=running", "--format", "{{.Names}}"],
-                    text=True,
-                ).splitlines() if line.strip()
-            }
-        except Exception:
-            autostop_names = set()
+        containers = docker_ps()
+        active = {c["name"] for c in containers if c["running"]}
 
-        active = {name for name, _ in containers}
         with LOCK:
             for name in list(idle_since.keys()):
                 if name not in active:
                     idle_since.pop(name, None)
 
-        for name, port in containers:
-            if name not in autostop_names:
+        for c in containers:
+            if not c["running"] or not c["port"] or not c["autostop"]:
                 continue
+            name, port = c["name"], c["port"]
             pong = query_server("localhost", port)
             count = parse_motd(pong)["players"] if pong else None
 
@@ -267,12 +256,10 @@ HTML = """<!DOCTYPE html>
   <style>
     body { font-family: 'IBM Plex Mono', monospace; }
     h1   { font-family: 'VT323', monospace; }
-    .card-glow { box-shadow: 0 0 0 1px rgba(74,222,128,0.15), 0 4px 24px rgba(0,0,0,0.4); }
+    .card-glow     { box-shadow: 0 0 0 1px rgba(74,222,128,0.15), 0 4px 24px rgba(0,0,0,0.4); }
     .card-glow-off { box-shadow: 0 0 0 1px rgba(255,255,255,0.06), 0 4px 24px rgba(0,0,0,0.4); }
     @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.3} }
     .pulse { animation: pulse-dot 1.8s ease-in-out infinite; }
-    @keyframes spin-once { to { transform: rotate(360deg); } }
-    .spinning { animation: spin-once 0.6s linear infinite; }
   </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100 min-h-screen p-6 md:p-10">
@@ -291,23 +278,25 @@ HTML = """<!DOCTYPE html>
   </div>
 
   <script>
+    let serverData = [];
+
     async function load() {
       const res = await fetch('/api/servers');
-      const servers = await res.json();
-      const el = document.getElementById('servers');
+      serverData = await res.json();
+      render();
+    }
 
-      if (!servers.length) {
+    function render() {
+      const el = document.getElementById('servers');
+      if (!serverData.length) {
         el.innerHTML = '<p class="text-zinc-600 text-sm">Keine Server gefunden.<br>Container brauchen das Label <code class="text-green-600">mc.bedrock=true</code>.</p>';
         return;
       }
-
-      el.innerHTML = servers.map(s => {
+      el.innerHTML = serverData.map(s => {
         const on = s.running;
-        const idle = s.idle_since ? Math.floor((Date.now()/1000) - s.idle_since) : null;
-        const idleStr = idle !== null
-          ? `<span class="text-amber-500/70">idle ${fmtSecs(idle)} / ${s.idle_timeout}s</span>`
+        const idleStr = s.idle_since
+          ? `<span id="idle-${s.name}" class="text-amber-500/70"></span>`
           : '';
-
         return `
         <div class="rounded-xl p-5 ${on ? 'bg-zinc-900 card-glow' : 'bg-zinc-900/50 card-glow-off'} transition-all">
           <div class="flex items-center justify-between gap-4">
@@ -318,6 +307,7 @@ HTML = """<!DOCTYPE html>
                 <div class="text-xs text-zinc-500 mt-0.5 space-x-3">
                   ${on && s.version ? `<span>v${s.version}</span>` : ''}
                   ${on ? `<span class="${s.players > 0 ? 'text-green-400' : 'text-zinc-500'}">${s.players}/${s.max} online</span>` : '<span>gestoppt</span>'}
+                  ${s.autostop ? '<span class="text-zinc-600">auto-stop</span>' : ''}
                   ${idleStr}
                 </div>
               </div>
@@ -335,14 +325,24 @@ HTML = """<!DOCTYPE html>
           </div>
         </div>`;
       }).join('');
-
       document.getElementById('updated').textContent =
         'aktualisiert: ' + new Date().toLocaleTimeString('de-DE');
+      updateTimers();
     }
 
     function fmtSecs(s) {
       if (s < 60) return s + 's';
       return Math.floor(s/60) + 'm ' + (s%60) + 's';
+    }
+
+    function updateTimers() {
+      serverData.forEach(s => {
+        const el = document.getElementById('idle-' + s.name);
+        if (!el) return;
+        const idle = s.idle_since ? Math.floor((Date.now()/1000) - s.idle_since) : null;
+        const remaining = idle !== null ? Math.max(0, s.idle_timeout - idle) : null;
+        el.textContent = remaining !== null ? 'stop in ' + fmtSecs(remaining) : '';
+      });
     }
 
     async function toggle(name, running) {
@@ -358,6 +358,7 @@ HTML = """<!DOCTYPE html>
 
     load();
     setInterval(load, 10000);
+    setInterval(updateTimers, 1000);
   </script>
 </body>
 </html>"""
@@ -389,12 +390,13 @@ class WebHandler(BaseHTTPRequestHandler):
             result = []
             for c in containers:
                 entry = {
-                    "name":    c["name"],
-                    "running": c["running"],
-                    "port":    c["port"],
-                    "version": None,
-                    "players": 0,
-                    "max":     0,
+                    "name":         c["name"],
+                    "running":      c["running"],
+                    "port":         c["port"],
+                    "autostop":     c["autostop"],
+                    "version":      None,
+                    "players":      0,
+                    "max":          0,
                     "idle_since":   None,
                     "idle_timeout": IDLE_TIMEOUT,
                 }
