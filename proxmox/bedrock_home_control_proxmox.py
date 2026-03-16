@@ -304,8 +304,13 @@ HTML = """<!DOCTYPE html>
 
     async function load() {
       const res = await fetch('/api/servers');
-      serverData = await res.json();
-      render();
+      const newData = await res.json();
+      if (JSON.stringify(newData) !== JSON.stringify(serverData)) {
+        serverData = newData;
+        render();
+      } else {
+        serverData = newData;  // idle_since Timestamps trotzdem updaten
+      }
     }
 
     function render() {
